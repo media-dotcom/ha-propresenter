@@ -17,3 +17,38 @@ show_message:
       example: '{"Name": "John Smith"}'
       selector:
         object:
+
+refresh_presentation_cache:
+  name: Refresh presentation cache
+  description: Refetch active presentation metadata and invalidate its thumbnail cache.
+
+trigger_slide:
+  name: Trigger slide
+  description: Trigger one slide in the active ProPresenter presentation without changing the ProPresenter view context.
+  target:
+    entity:
+      integration: propresenter
+      domain: sensor
+  fields:
+    slide_index:
+      name: Slide index
+      description: The original 0-based ProPresenter slide index.
+      required: true
+      example: 5
+      selector:
+        number:
+          min: 0
+          step: 1
+          mode: box
+    expected_presentation_uuid:
+      name: Expected presentation UUID
+      description: Optional snapshot UUID used to reject a stale dashboard click.
+      required: false
+      selector:
+        text:
+    expected_metadata_revision:
+      name: Expected metadata revision
+      description: Optional opaque metadata revision paired with the expected UUID.
+      required: false
+      selector:
+        text:

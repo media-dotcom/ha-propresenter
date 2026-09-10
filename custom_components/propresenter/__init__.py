@@ -17,6 +17,7 @@ from homeassistant.exceptions import ConfigEntryNotReady
 from .const import DOMAIN
 from .coordinator import ProPresenterCoordinator, ProPresenterStreamingCoordinator
 from .services import async_setup_services, async_unload_services
+from .web_api import async_setup_web_api
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -26,9 +27,16 @@ PLATFORMS: list[Platform] = [
     Platform.IMAGE,
     Platform.MEDIA_PLAYER,
     Platform.SELECT,
+    Platform.SENSOR,
     Platform.SWITCH,
     Platform.TEXT,
 ]
+
+
+async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+    """Register integration-wide WebSocket and authenticated HTTP APIs."""
+    async_setup_web_api(hass)
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:

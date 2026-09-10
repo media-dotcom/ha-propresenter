@@ -40,8 +40,13 @@ def generate_slide_label(slide: dict[str, Any], slide_index: int) -> str:
         A string label for the slide
     """
     slide_label = slide.get("label", "")
+    if not isinstance(slide_label, str):
+        slide_label = str(slide_label) if slide_label is not None else ""
     if not slide_label:
-        slide_text = slide.get("text", "").strip()
+        slide_text = slide.get("text", "")
+        if not isinstance(slide_text, str):
+            slide_text = ""
+        slide_text = slide_text.strip()
         if slide_text:
             # Use first 40 chars of text
             slide_label = slide_text[:40] + ("..." if len(slide_text) > 40 else "")

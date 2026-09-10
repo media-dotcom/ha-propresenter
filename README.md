@@ -25,6 +25,28 @@ This custom integration allows you to control [ProPresenter](https://www.renewed
 - **Presentation Thumbnails**: Image entities displaying slide thumbnails for easy reference
 <img width="751" height="324" alt="image" src="https://github.com/user-attachments/assets/44f10684-43d3-45a9-a91a-550a7a76f9d6" />
 
+## Dynamic presentation browser
+
+The integration also exposes one stable `Active presentation` sensor per
+ProPresenter config entry. It keeps scalar live state in Home Assistant and
+serves the changing slide collection on demand over an authenticated WebSocket
+command. Slide thumbnails are authenticated, revision-aware, and bounded by a
+shared per-entry cache; individual slides are not created as Home Assistant
+entities.
+
+The companion dashboard card is maintained separately at
+`lovelace-propresenter-presentation`. Install its
+`dist/propresenter-presentation.js` resource through HACS, then add
+`custom:propresenter-presentation` and select the Active presentation sensor in
+the visual editor. The card supports read-only monitoring, guarded triggering,
+explicit refresh, disabled-slide preservation, and a follow-live toggle.
+
+The trigger service is `propresenter.trigger_slide`. It accepts the original
+0-based `slide_index` and optional `expected_presentation_uuid` plus
+`expected_metadata_revision` guards. The card supplies both guards and uses the
+active-presentation trigger endpoint, so it does not focus a different
+presentation in ProPresenter.
+
 ## Video Guide
 
 <a href="https://youtu.be/4U3ebJGnlks">
@@ -85,4 +107,3 @@ Full API documentation: https://openapi.propresenter.com
 
 - greyshirtguy for his wonderful and tireless work on https://github.com/bitfocus/companion-module-renewedvision-propresenter-api
 - ProPresenter by Renewed Vision: https://renewedvision.com/propresenter
-

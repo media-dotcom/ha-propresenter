@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import asyncio
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import aiohttp
@@ -21,6 +23,14 @@ class ProPresenterConnectionError(ProPresenterAPIError):
 
 class ProPresenterAuthError(ProPresenterAPIError):
     """Exception for authentication errors."""
+
+
+class ProPresenterNotFoundError(ProPresenterAPIError):
+    """The requested ProPresenter resource or endpoint does not exist."""
+
+
+class ProPresenterRequestError(ProPresenterAPIError):
+    """A strict request failed with a non-success HTTP response."""
 
 
 class ProPresenterAPI:
@@ -57,7 +67,12 @@ class ProPresenterAPI:
         if self._session and not self._session.closed:
             await self._session.close()
 
-    async def stream_status_updates(self, endpoints: list[str], callback):
+    async def stream_status_updates(
+        self,
+        endpoints: list[str],
+        callback: Callable[[str, Any], Awaitable[None]],
+        on_connected: Callable[[], Awaitable[None]] | None = None,
+    ) -> None:
         """Stream status updates from ProPresenter.
 
         This creates a persistent connection to /v1/status/updates and calls
@@ -66,6 +81,7 @@ class ProPresenterAPI:
         Args:
             endpoints: List of endpoints to monitor (e.g., ['transport/audio/current', 'transport/audio/time'])
             callback: Async function to call with update data (path, data)
+            on_connected: Optional callback invoked after the stream is ready.
         """
         url = f"{self.base_url}/v1/status/updates"
         session = await self._get_session()
@@ -88,6 +104,8 @@ class ProPresenterAPI:
             ) as response:
                 response.raise_for_status()
                 _LOGGER.info("Stream connection established, reading updates...")
+                if on_connected:
+                    await on_connected()
 
                 # Read the chunked response line by line
                 async for line in response.content:
@@ -169,6 +187,54 @@ class ProPresenterAPI:
                 f"Error communicating with ProPresenter: {err}"
             ) from err
         except TimeoutError as err:
+            raise ProPresenterConnectionError(
+                f"Timeout connecting to ProPresenter at {self.host}:{self.port}"
+            ) from err
+
+    async def _request_strict(
+        self, method: str, endpoint: str, json_data: dict[str, Any] | None = None
+    ) -> Any:
+        """Make a request where 404 and empty success are distinct outcomes.
+
+        Older integration methods intentionally treat a missing optional API
+        endpoint as ``None``.  Triggering a slide is different: a 404 must be
+        surfaced to the caller and a successful empty response must complete
+        normally.
+        """
+        url = f"{self.base_url}{endpoint}"
+        session = await self._get_session()
+
+        try:
+            async with async_timeout.timeout(10):
+                async with session.request(method, url, json=json_data) as response:
+                    if response.status == 404:
+                        raise ProPresenterNotFoundError(
+                            f"ProPresenter endpoint not found: {endpoint}"
+                        )
+                    try:
+                        response.raise_for_status()
+                    except aiohttp.ClientResponseError as err:
+                        raise ProPresenterRequestError(
+                            f"ProPresenter returned HTTP {err.status} for {endpoint}"
+                        ) from err
+
+                    if response.content_length == 0:
+                        return None
+                    content_type = response.headers.get("content-type", "")
+                    if "application/json" in content_type:
+                        return await response.json()
+                    return None
+        except ProPresenterAPIError:
+            raise
+        except aiohttp.ClientConnectorError as err:
+            raise ProPresenterConnectionError(
+                f"Cannot connect to ProPresenter at {self.host}:{self.port}"
+            ) from err
+        except aiohttp.ClientError as err:
+            raise ProPresenterConnectionError(
+                f"Error communicating with ProPresenter: {err}"
+            ) from err
+        except (TimeoutError, asyncio.TimeoutError) as err:
             raise ProPresenterConnectionError(
                 f"Timeout connecting to ProPresenter at {self.host}:{self.port}"
             ) from err
@@ -805,7 +871,7 @@ class ProPresenterAPI:
         """
         endpoint = f"/v1/presentation/active/{slide_index}/trigger"
         _LOGGER.info("Triggering active presentation slide via endpoint: %s", endpoint)
-        result = await self._request("GET", endpoint)
+        result = await self._request_strict("GET", endpoint)
         return result
 
     async def trigger_focused_presentation_slide(self, slide_index: int) -> None:

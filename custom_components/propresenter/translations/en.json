@@ -76,6 +76,11 @@
       "clear_video_input": {
         "name": "Clear video input"
       }
+    },
+    "sensor": {
+      "active_presentation": {
+        "name": "Active presentation"
+      }
     }
   },
   "services": {
@@ -96,6 +101,24 @@
     "refresh_presentation_cache": {
       "name": "Refresh presentation cache",
       "description": "Force refresh the cached presentation details. Call this after editing slide notes in ProPresenter to immediately update the sensor values."
+    },
+    "trigger_slide": {
+      "name": "Trigger slide",
+      "description": "Trigger one slide in the active ProPresenter presentation without changing the ProPresenter view context.",
+      "fields": {
+        "slide_index": {
+          "name": "Slide index",
+          "description": "The original 0-based ProPresenter slide index."
+        },
+        "expected_presentation_uuid": {
+          "name": "Expected presentation UUID",
+          "description": "Snapshot UUID used to reject a stale dashboard click."
+        },
+        "expected_metadata_revision": {
+          "name": "Expected metadata revision",
+          "description": "Opaque metadata revision paired with the expected UUID."
+        }
+      }
     }
   }
 }

@@ -3,6 +3,7 @@
 import asyncio
 from datetime import timedelta
 import logging
+import secrets
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -13,6 +14,15 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .api import ProPresenterAPI, ProPresenterConnectionError
 from .const import CONF_PORT, DEFAULT_PORT, DOMAIN
+from .presentation import (
+    find_slide,
+    find_slide_group,
+    get_presentation_name,
+    get_presentation_uuid,
+    get_slide_index,
+    normalize_presentation,
+)
+from .thumbnail_cache import ThumbnailCache, ThumbnailKey
 from .utils import collect_playlist_uuids
 
 _LOGGER = logging.getLogger(__name__)
@@ -229,9 +239,15 @@ class ProPresenterStreamingCoordinator(DataUpdateCoordinator):
         self.static_coordinator = static_coordinator
         self._stream_task = None
         self._poll_task = None
+        self._stream_has_connected = False
         self.connected = False  # Track connection state globally
         self._last_logged_error = None  # Track last error to avoid log spam
         self._error_count = 0  # Count consecutive errors
+        self._metadata: dict[str, Any] | None = None
+        self._metadata_revision: str | None = None
+        self._metadata_task: asyncio.Task[dict[str, Any] | None] | None = None
+        self._metadata_lock = asyncio.Lock()
+        self.thumbnail_cache = ThumbnailCache()
 
         # Set reference back to static coordinator
         if static_coordinator:
@@ -239,6 +255,8 @@ class ProPresenterStreamingCoordinator(DataUpdateCoordinator):
 
         self._data = {
             "active_presentation": {},
+            "slide_index": {},
+            "active_presentation_details": None,
             "stage_screens": [],
             "stage_layouts": [],
             "layout_map": [],
@@ -278,6 +296,7 @@ class ProPresenterStreamingCoordinator(DataUpdateCoordinator):
                 # Fetch all initial data in parallel for faster startup
                 results = await asyncio.gather(
                     self.api.get_active_presentation(),
+                    self.api.get_presentation_slide_index(),
                     self.api.get_stage_screens(),
                     self.api.get_stage_layouts(),
                     self.api.get_stage_layout_map(),
@@ -298,6 +317,7 @@ class ProPresenterStreamingCoordinator(DataUpdateCoordinator):
                 # Unpack results (handle None values and exceptions)
                 keys = [
                     "active_presentation",
+                    "slide_index",
                     "stage_screens",
                     "stage_layouts",
                     "layout_map",
@@ -325,6 +345,7 @@ class ProPresenterStreamingCoordinator(DataUpdateCoordinator):
                             if key
                             in [
                                 "active_presentation",
+                                "slide_index",
                                 "current_look",
                                 "audio_transport_state",
                                 "presentation_transport_state",
@@ -339,6 +360,7 @@ class ProPresenterStreamingCoordinator(DataUpdateCoordinator):
                             if key
                             in [
                                 "active_presentation",
+                                "slide_index",
                                 "current_look",
                                 "audio_transport_state",
                                 "presentation_transport_state",
@@ -348,6 +370,16 @@ class ProPresenterStreamingCoordinator(DataUpdateCoordinator):
                             else []
                         )
 
+                try:
+                    await self.async_ensure_active_presentation_details()
+                except Exception as err:
+                    # Metadata is an optional browser capability.  Keep the
+                    # existing integration available when a presentation is
+                    # temporarily unavailable or the details endpoint fails.
+                    _LOGGER.warning(
+                        "Failed to fetch active presentation details: %s", err
+                    )
+
             except Exception as err:
                 raise UpdateFailed(f"Error fetching initial data: {err}")
 
@@ -355,11 +387,16 @@ class ProPresenterStreamingCoordinator(DataUpdateCoordinator):
 
     async def _handle_status_update(self, path: str, data: Any) -> None:
         """Handle incoming status update from stream."""
+        old_uuid = self.active_presentation_uuid
         # Update data dictionary based on path (no logging for performance)
         if path == "presentation/current" or path == "presentation/active":
-            self._data["active_presentation"] = data
+            self._data["active_presentation"] = data or {}
+            if not data:
+                # Do not let the previous slide-index payload masquerade as
+                # an active presentation while ProPresenter is cleared.
+                self._data["slide_index"] = {}
         elif path == "presentation/slide_index":
-            self._data["slide_index"] = data
+            self._data["slide_index"] = data or {}
         elif path == "announcement/slide_index":
             self._data["announcement_slide_index"] = data
         elif path == "stage/screens":
@@ -399,8 +436,241 @@ class ProPresenterStreamingCoordinator(DataUpdateCoordinator):
         elif path == "stage/message":
             self._data["stage_message"] = data
 
+        new_uuid = self.active_presentation_uuid
+        if path in {
+            "presentation/current",
+            "presentation/active",
+            "presentation/slide_index",
+        }:
+            if new_uuid != old_uuid:
+                self._invalidate_metadata()
+                self._schedule_metadata_refresh()
+
         # Notify listeners that data has changed
         self.async_set_updated_data(self._data)
+
+    @property
+    def active_presentation_uuid(self) -> str | None:
+        """Return the UUID currently reported by ProPresenter."""
+        return get_presentation_uuid(
+            self._data.get("active_presentation")
+        ) or get_presentation_uuid(self._data.get("slide_index"))
+
+    @property
+    def metadata_revision(self) -> str | None:
+        """Return the opaque generation token for the current metadata."""
+        return self._metadata_revision
+
+    @property
+    def metadata(self) -> dict[str, Any] | None:
+        """Return normalized active presentation metadata, if available."""
+        return self._metadata
+
+    @property
+    def metadata_available(self) -> bool:
+        """Whether normalized metadata matches the currently active UUID."""
+        return bool(
+            self._metadata
+            and self._metadata_revision
+            and self._metadata.get("uuid") == self.active_presentation_uuid
+        )
+
+    @property
+    def slide_layer_active(self) -> bool:
+        """Whether ProPresenter's slide output layer is currently visible."""
+        return bool(self._data.get("status_layers", {}).get("slide", False))
+
+    def get_active_snapshot(self) -> dict[str, Any]:
+        """Return scalar active state for the stable Home Assistant sensor."""
+        slide_index_data = self._data.get("slide_index") or {}
+        presentation_index = slide_index_data.get("presentation_index")
+        current_index = get_slide_index(slide_index_data)
+        active_data = self._data.get("active_presentation") or {}
+        presentation_uuid = self.active_presentation_uuid
+        name = (
+            get_presentation_name(active_data)
+            or get_presentation_name(presentation_index)
+            or (
+                self._metadata.get("name")
+                if self._metadata and self._metadata.get("uuid") == presentation_uuid
+                else None
+            )
+        )
+        current_slide = find_slide(self._metadata, current_index)
+        current_group = find_slide_group(self._metadata, current_index)
+        return {
+            "presentation_uuid": presentation_uuid,
+            "current_index": current_index,
+            "current_label": current_slide.get("label") if current_slide else None,
+            "current_group": current_group.get("label") if current_group else None,
+            "slide_count": self._metadata.get("slide_count", 0)
+            if self.metadata_available
+            else 0,
+            "metadata_revision": self._metadata_revision
+            if self.metadata_available
+            else None,
+            "slide_layer_active": self.slide_layer_active,
+            "metadata_available": self.metadata_available,
+            "name": name,
+        }
+
+    def build_metadata_response(self, entity_id: str) -> dict[str, Any]:
+        """Build the stable wire response consumed by the companion card."""
+        snapshot = self.get_active_snapshot()
+        return {
+            "protocol_version": 1,
+            "entity_id": entity_id,
+            "metadata_revision": snapshot["metadata_revision"],
+            "presentation_uuid": snapshot["presentation_uuid"],
+            "presentation_name": snapshot["name"],
+            "current_slide_index": snapshot["current_index"],
+            "current_slide_label": snapshot["current_label"],
+            "current_group": snapshot["current_group"],
+            "slide_count": snapshot["slide_count"],
+            "slide_layer_active": snapshot["slide_layer_active"],
+            "metadata_available": snapshot["metadata_available"],
+            "groups": self._metadata.get("groups", [])
+            if self.metadata_available
+            else [],
+        }
+
+    async def async_ensure_active_presentation_details(
+        self, *, refresh: bool = False
+    ) -> dict[str, Any] | None:
+        """Fetch and normalize details, sharing concurrent requests."""
+        if self._metadata_task and not self._metadata_task.done():
+            return await asyncio.shield(self._metadata_task)
+
+        current_uuid = self.active_presentation_uuid
+        if (
+            not refresh
+            and self.metadata_available
+            and self._metadata
+            and self._metadata.get("uuid") == current_uuid
+        ):
+            return self._metadata
+
+        task = self.hass.async_create_task(
+            self._async_fetch_active_presentation_details()
+        )
+        self._metadata_task = task
+        try:
+            result = await asyncio.shield(task)
+        finally:
+            if self._metadata_task is task and task.done():
+                self._metadata_task = None
+        if result is None and self.active_presentation_uuid:
+            return await self.async_ensure_active_presentation_details(refresh=True)
+        return result
+
+    async def _async_fetch_active_presentation_details(self) -> dict[str, Any] | None:
+        """Fetch details and commit them only if the active UUID is unchanged."""
+        async with self._metadata_lock:
+            presentation_uuid = self.active_presentation_uuid
+            if not presentation_uuid:
+                self._invalidate_metadata(clear_task=False)
+                self.async_set_updated_data(self._data)
+                return None
+
+            details = await self.api.get_presentation_details(presentation_uuid)
+            if not details:
+                raise ProPresenterConnectionError(
+                    f"No details returned for presentation {presentation_uuid}"
+                )
+
+            if self.active_presentation_uuid != presentation_uuid:
+                _LOGGER.debug(
+                    "Discarding details for stale presentation %s", presentation_uuid
+                )
+                return None
+
+            normalized = normalize_presentation(details, presentation_uuid)
+            self._metadata = normalized
+            self._metadata_revision = secrets.token_urlsafe(24)
+            self._data["active_presentation_details"] = normalized
+            self.thumbnail_cache.set_current_identity(
+                presentation_uuid, self._metadata_revision
+            )
+            self.async_set_updated_data(self._data)
+            return normalized
+
+    def _invalidate_metadata(self, *, clear_task: bool = True) -> None:
+        """Drop old metadata and bytes before a new UUID/revision can be used."""
+        self._metadata = None
+        self._metadata_revision = None
+        self._data["active_presentation_details"] = None
+        self.thumbnail_cache.clear()
+        self.thumbnail_cache.clear_current_identity()
+        if clear_task and self._metadata_task and not self._metadata_task.done():
+            self._metadata_task.cancel()
+            self._metadata_task = None
+
+    def _schedule_metadata_refresh(self) -> None:
+        """Refresh metadata after a stream update without blocking the stream."""
+
+        async def refresh() -> None:
+            try:
+                await self.async_ensure_active_presentation_details(refresh=True)
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:
+                _LOGGER.warning(
+                    "Unable to refresh active presentation metadata: %s", err
+                )
+
+        self.hass.async_create_task(refresh())
+
+    async def async_refresh_active_presentation(self) -> dict[str, Any] | None:
+        """Explicitly refetch metadata and invalidate all old thumbnails."""
+        self._invalidate_metadata()
+        self.async_set_updated_data(self._data)
+        return await self.async_ensure_active_presentation_details(refresh=True)
+
+    async def async_reconcile_active_presentation(
+        self, *, force_metadata_refresh: bool = True
+    ) -> None:
+        """Reconcile active UUID, slide index, and metadata after reconnect."""
+        active, slide_index = await asyncio.gather(
+            self.api.get_active_presentation(),
+            self.api.get_presentation_slide_index(),
+        )
+        old_uuid = self.active_presentation_uuid
+        self._data["active_presentation"] = active or {}
+        self._data["slide_index"] = slide_index or {}
+        if self.active_presentation_uuid != old_uuid or force_metadata_refresh:
+            # A reconnect is an explicit freshness boundary even when the same
+            # presentation is still active.
+            self._invalidate_metadata()
+        await self.async_ensure_active_presentation_details(
+            refresh=force_metadata_refresh
+        )
+        self.async_set_updated_data(self._data)
+
+    async def async_get_thumbnail(
+        self,
+        presentation_uuid: str,
+        revision: str,
+        slide_index: int,
+        quality: int,
+    ) -> bytes | None:
+        """Get one authenticated-view thumbnail through the shared cache."""
+        if not self.metadata_available:
+            return None
+        if (
+            presentation_uuid != self.active_presentation_uuid
+            or revision != self._metadata_revision
+            or slide_index < 0
+            or slide_index >= self._metadata.get("slide_count", 0)
+        ):
+            return None
+        key: ThumbnailKey = (presentation_uuid, revision, slide_index, quality)
+        self.thumbnail_cache.set_current_identity(presentation_uuid, revision)
+        return await self.thumbnail_cache.get_or_fetch(
+            key,
+            lambda: self.api.get_presentation_thumbnail(
+                presentation_uuid, slide_index, quality=quality
+            ),
+        )
 
     async def start_streaming(self) -> None:
         """Start the streaming connection."""
@@ -464,22 +734,9 @@ class ProPresenterStreamingCoordinator(DataUpdateCoordinator):
                         "stage/message",
                     ],
                     self._handle_status_update,
+                    on_connected=self._handle_stream_connected,
                 )
-                # If we get here, stream connected successfully
-                self.connected = True
-                self.last_update_success = True
-
-                # When reconnecting, refresh the static coordinator to get fresh version info
-                # (which will automatically update device registry if version changed)
-                if self.static_coordinator:
-                    try:
-                        await self.static_coordinator.async_refresh()
-                    except Exception as err:
-                        _LOGGER.debug(
-                            f"Could not refresh static coordinator on reconnect: {err}"
-                        )
-
-                self.async_update_listeners()
+                raise ProPresenterConnectionError("Status update stream ended")
             except asyncio.CancelledError:
                 raise
             except Exception as err:
@@ -536,8 +793,36 @@ class ProPresenterStreamingCoordinator(DataUpdateCoordinator):
                 # Exponential backoff for reconnection attempts
                 reconnect_delay = min(reconnect_delay * 1.5, max_reconnect_delay)
 
+    async def _handle_stream_connected(self) -> None:
+        """Reconcile state once the long-lived status stream is established."""
+        self.connected = True
+        self.last_update_success = True
+        try:
+            await self.async_reconcile_active_presentation(
+                force_metadata_refresh=self._stream_has_connected
+            )
+            self._stream_has_connected = True
+        except Exception as err:
+            _LOGGER.warning("Could not reconcile ProPresenter after reconnect: %s", err)
+
+        if self.static_coordinator:
+            try:
+                await self.static_coordinator.async_refresh()
+            except Exception as err:
+                _LOGGER.debug(
+                    "Could not refresh static coordinator on reconnect: %s", err
+                )
+        self.async_update_listeners()
+
     async def async_shutdown(self) -> None:
         """Stop the streaming connection."""
+        if self._metadata_task and not self._metadata_task.done():
+            self._metadata_task.cancel()
+            try:
+                await self._metadata_task
+            except asyncio.CancelledError:
+                pass
+
         if self._stream_task and not self._stream_task.done():
             self._stream_task.cancel()
             try:
