@@ -8,7 +8,9 @@ select entities for choosing stage screen layouts.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
+from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
@@ -37,8 +39,17 @@ PLATFORMS: list[Platform] = [
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
-    """Register integration-wide WebSocket and authenticated HTTP APIs."""
+    """Register integration-wide APIs and the dashboard card asset."""
     async_setup_web_api(hass)
+    await hass.http.async_register_static_paths(
+        [
+            StaticPathConfig(
+                "/propresenter/propresenter-presentation.js",
+                str(Path(__file__).parent / "www" / "propresenter-presentation.js"),
+                cache_headers=False,
+            )
+        ]
+    )
     return True
 
 
