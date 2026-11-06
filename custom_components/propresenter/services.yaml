@@ -24,7 +24,7 @@ refresh_presentation_cache:
 
 trigger_slide:
   name: Trigger slide
-  description: Trigger one slide in the active ProPresenter presentation without changing the ProPresenter view context.
+  description: Trigger one slide in the active presentation, or focus a selected presentation from a configured playlist before triggering its slide.
   target:
     entity:
       integration: propresenter
@@ -42,7 +42,7 @@ trigger_slide:
           mode: box
     expected_presentation_uuid:
       name: Expected presentation UUID
-      description: Optional snapshot UUID used to reject a stale dashboard click.
+      description: Optional active or playlist presentation UUID used to reject a stale dashboard click.
       required: false
       selector:
         text:

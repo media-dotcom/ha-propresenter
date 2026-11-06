@@ -41,8 +41,10 @@ entities.
 The bundled `custom:propresenter-presentation` dashboard card renders the slide
 browser as a responsive grid. It supports read-only monitoring, guarded slide
 and playlist triggering, explicit refresh, disabled-slide preservation, and a
-follow-live toggle. Playlist browsing does not change live output; the Live
-button returns to the active presentation.
+follow-live toggle. Browsing a playlist item does not change live output. Click
+a previewed slide to make that presentation live on the selected slide, or use
+Enter to make the playlist item live without choosing a slide. The Live button
+returns the browser to the active presentation.
 
 After installing the integration, add a dashboard resource in Home Assistant
 under **Settings → Dashboards → Resources**:
@@ -58,9 +60,9 @@ card configuration can be kept.
 
 The trigger service is `propresenter.trigger_slide`. It accepts the original
 0-based `slide_index` and optional `expected_presentation_uuid` plus
-`expected_metadata_revision` guards. The card supplies both guards and uses the
-active-presentation trigger endpoint, so it does not focus a different
-presentation in ProPresenter.
+`expected_metadata_revision` guards. The card supplies both guards for live
+slides and browsed playlist slides. A browsed slide trigger focuses that
+presentation before sending the selected slide; a stale selection is rejected.
 
 ## Video Guide
 

@@ -814,11 +814,14 @@ class ProPresenterAPI:
             presentation_uuid: The UUID of the presentation
             slide_index: The index of the slide to trigger (0-based)
         """
-        # First focus the presentation
-        await self._request("GET", f"/v1/presentation/{presentation_uuid}/focus")
+        # A failed focus must stop before the focused-slide endpoint, or the
+        # request could trigger a slide in a different presentation.
+        await self._request_strict("GET", f"/v1/presentation/{presentation_uuid}/focus")
 
         # Then trigger the specific slide index in the focused presentation
-        await self._request("GET", f"/v1/presentation/focused/{slide_index}/trigger")
+        await self._request_strict(
+            "GET", f"/v1/presentation/focused/{slide_index}/trigger"
+        )
 
     async def trigger_playlist_item(self, playlist_id: str, item_index: int) -> None:
         """Trigger a specific item in a playlist by its index.

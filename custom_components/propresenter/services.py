@@ -234,6 +234,57 @@ def async_setup_services(hass: HomeAssistant) -> None:
                 "expected_presentation_uuid and expected_metadata_revision must be provided together"
             )
 
+        slide_index = call.data["slide_index"]
+
+        if expected_uuid and expected_uuid != coordinator.active_presentation_uuid:
+            if not coordinator.is_known_presentation_uuid(expected_uuid):
+                raise ServiceValidationError(
+                    "The selected presentation is no longer in a configured playlist"
+                )
+            try:
+                metadata = await coordinator.async_ensure_presentation_details(
+                    expected_uuid
+                )
+            except LookupError as err:
+                raise ServiceValidationError(
+                    "The selected presentation is no longer in a configured playlist"
+                ) from err
+
+            revision = coordinator.get_presentation_revision(expected_uuid)
+            if not metadata or not revision:
+                raise ServiceValidationError(
+                    "Selected presentation metadata is unavailable"
+                )
+            if expected_revision != revision:
+                raise ServiceValidationError(
+                    "The presentation changed while this slide was being selected; refresh and try again"
+                )
+            if (
+                slide_index >= metadata.get("slide_count", 0)
+                or find_slide(metadata, slide_index) is None
+            ):
+                raise ServiceValidationError(
+                    f"Slide index {slide_index} is outside the selected presentation"
+                )
+
+            try:
+                # Focus the selected playlist presentation before triggering
+                # the slide. The UUID and revision above bind this action to
+                # the exact browsed snapshot shown by the card.
+                await coordinator.api.trigger_slide(expected_uuid, slide_index)
+            except ProPresenterNotFoundError as err:
+                raise HomeAssistantError(
+                    f"ProPresenter rejected the slide trigger: {err}"
+                ) from err
+            except ProPresenterRequestError as err:
+                raise HomeAssistantError(f"ProPresenter trigger failed: {err}") from err
+            except ProPresenterConnectionError as err:
+                # The request may already have reached ProPresenter; do not retry.
+                raise HomeAssistantError(
+                    f"ProPresenter trigger status is unknown; reconcile before retrying: {err}"
+                ) from err
+            return
+
         metadata = await coordinator.async_ensure_active_presentation_details()
         snapshot = coordinator.get_active_snapshot()
         if not metadata or not coordinator.metadata_available:
@@ -245,8 +296,6 @@ def async_setup_services(hass: HomeAssistant) -> None:
             raise ServiceValidationError(
                 "The presentation changed while this slide was being selected; refresh and try again"
             )
-
-        slide_index = call.data["slide_index"]
         if (
             slide_index >= snapshot["slide_count"]
             or find_slide(metadata, slide_index) is None

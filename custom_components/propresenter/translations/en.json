@@ -112,7 +112,7 @@
         },
         "expected_presentation_uuid": {
           "name": "Expected presentation UUID",
-          "description": "Snapshot UUID used to reject a stale dashboard click."
+          "description": "Active or playlist presentation UUID used to reject a stale dashboard click."
         },
         "expected_metadata_revision": {
           "name": "Expected metadata revision",

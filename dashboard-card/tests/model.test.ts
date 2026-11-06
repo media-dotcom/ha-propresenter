@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   flattenSlides,
+  canTriggerSlide,
   formatHassError,
   formatMediaTime,
   guardedPlaylistTriggerData,
   guardedTriggerData,
   isVideoMediaPlayerActive,
+  isSlideLiveForSelection,
   metadataPointer,
   mediaPlayerTransportState,
   normalizeConfig,
@@ -91,6 +93,17 @@ describe("presentation card model", () => {
       expected_metadata_revision: "revision",
     });
     expect(() => guardedTriggerData("sensor.pp", 5, "uuid", null)).toThrow();
+  });
+
+  it("allows triggering browsed slides and highlights one after it goes live", () => {
+    expect(canTriggerSlide(false, true, false)).toBe(true);
+    expect(canTriggerSlide(true, true, false)).toBe(false);
+    expect(canTriggerSlide(false, false, false)).toBe(false);
+    expect(canTriggerSlide(false, true, true)).toBe(false);
+
+    expect(isSlideLiveForSelection(2, 2, "browsed", "live")).toBe(false);
+    expect(isSlideLiveForSelection(2, 2, "browsed", "browsed")).toBe(true);
+    expect(isSlideLiveForSelection(1, 2, "browsed", "browsed")).toBe(false);
   });
 
   it("includes playlist identity and revision guards in a live switch payload", () => {

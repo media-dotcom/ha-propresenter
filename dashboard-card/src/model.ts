@@ -79,6 +79,20 @@ export function flattenSlides(groups: PresentationGroup[]): PresentationSlide[] 
   return groups.flatMap((group) => group.slides);
 }
 
+export function isSlideLiveForSelection(
+  slideIndex: number,
+  liveSlideIndex: number | null,
+  selectedPresentationUuid: string | null,
+  livePresentationUuid: string | null,
+): boolean {
+  return slideIndex === liveSlideIndex &&
+    (!selectedPresentationUuid || selectedPresentationUuid === livePresentationUuid);
+}
+
+export function canTriggerSlide(readOnly: boolean, enabled: boolean, editorPreview: boolean): boolean {
+  return !readOnly && enabled && !editorPreview;
+}
+
 export function metadataPointer(state: HassState | undefined): string {
   const attributes = state?.attributes ?? {};
   return [
