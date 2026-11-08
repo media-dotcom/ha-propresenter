@@ -59,6 +59,18 @@ class _Session:
         return _ResponseContext(self.response)
 
 
+class _SequenceSession:
+    closed = False
+
+    def __init__(self, responses: list[_Response]) -> None:
+        self.responses = iter(responses)
+        self.urls: list[str] = []
+
+    def request(self, _method: str, url: str, **_kwargs) -> _ResponseContext:
+        self.urls.append(url)
+        return _ResponseContext(next(self.responses))
+
+
 class StrictRequestTest(unittest.TestCase):
     def test_404_is_not_collapsed_into_success(self) -> None:
         async def run() -> None:
@@ -85,6 +97,51 @@ class StrictRequestTest(unittest.TestCase):
             api._session = _Session(_Response(500))
             with self.assertRaises(ProPresenterRequestError):
                 await api._request_strict("GET", "/v1/presentation/active/2/trigger")
+
+        asyncio.run(run())
+
+    def test_playlist_item_trigger_uses_strict_errors(self) -> None:
+        async def run() -> None:
+            api = ProPresenterAPI("127.0.0.1")
+            api._session = _Session(_Response(404))
+            with self.assertRaises(ProPresenterNotFoundError):
+                await api.trigger_playlist_item("playlist", 3)
+
+        asyncio.run(run())
+
+    def test_focused_slide_trigger_stops_when_presentation_cannot_be_focused(
+        self,
+    ) -> None:
+        async def run() -> None:
+            api = ProPresenterAPI("127.0.0.1")
+            session = _SequenceSession([_Response(404)])
+            api._session = session
+
+            with self.assertRaises(ProPresenterNotFoundError):
+                await api.trigger_slide("missing-presentation", 2)
+
+            self.assertEqual(
+                session.urls,
+                ["http://127.0.0.1:50001/v1/presentation/missing-presentation/focus"],
+            )
+
+        asyncio.run(run())
+
+    def test_focused_slide_trigger_accepts_empty_success_responses(self) -> None:
+        async def run() -> None:
+            api = ProPresenterAPI("127.0.0.1")
+            session = _SequenceSession([_Response(204), _Response(204)])
+            api._session = session
+
+            await api.trigger_slide("presentation", 2)
+
+            self.assertEqual(
+                session.urls,
+                [
+                    "http://127.0.0.1:50001/v1/presentation/presentation/focus",
+                    "http://127.0.0.1:50001/v1/presentation/focused/2/trigger",
+                ],
+            )
 
         asyncio.run(run())
 

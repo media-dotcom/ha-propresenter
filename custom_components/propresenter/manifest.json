@@ -4,10 +4,10 @@
   "codeowners": ["@BenJamesAndo"],
   "config_flow": true,
   "dependencies": ["http"],
-  "documentation": "https://github.com/media-dotcom/ha-propresenter-reliable-browser",
+  "documentation": "https://github.com/media-dotcom/ha-propresenter-suite",
   "iot_class": "local_push",
-  "issue_tracker": "https://github.com/media-dotcom/ha-propresenter-reliable-browser/issues",
+  "issue_tracker": "https://github.com/media-dotcom/ha-propresenter-suite/issues",
   "requirements": [],
-  "version": "0.5.0",
+  "version": "0.8.0",
   "zeroconf": ["_pro7proremote._tcp.local.", "_pro7stagedsply._tcp.local.", "_proapiv1ws._tcp.local."]
 }

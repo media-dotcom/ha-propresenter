@@ -27,9 +27,11 @@ from .const import (
     DOMAIN,
     SERVICE_REFRESH_CACHE,
     SERVICE_SHOW_MESSAGE,
+    SERVICE_TRIGGER_PLAYLIST_ITEM,
     SERVICE_TRIGGER_SLIDE,
 )
 from .coordinator import ProPresenterCoordinator
+from .playlist import find_playlist_item
 from .presentation import find_slide
 
 _LOGGER = logging.getLogger(__name__)
@@ -48,6 +50,17 @@ TRIGGER_SLIDE_SCHEMA = vol.Schema(
         vol.Required("slide_index"): vol.All(vol.Coerce(int), vol.Range(min=0)),
         vol.Optional("expected_presentation_uuid"): cv.string,
         vol.Optional("expected_metadata_revision"): cv.string,
+    }
+)
+
+TRIGGER_PLAYLIST_ITEM_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_ENTITY_ID): cv.entity_ids,
+        vol.Required("playlist_uuid"): cv.string,
+        vol.Required("item_key"): cv.string,
+        vol.Required("item_index"): vol.All(vol.Coerce(int), vol.Range(min=0)),
+        vol.Required("presentation_uuid"): cv.string,
+        vol.Required("expected_playlist_revision"): cv.string,
     }
 )
 
@@ -221,6 +234,57 @@ def async_setup_services(hass: HomeAssistant) -> None:
                 "expected_presentation_uuid and expected_metadata_revision must be provided together"
             )
 
+        slide_index = call.data["slide_index"]
+
+        if expected_uuid and expected_uuid != coordinator.active_presentation_uuid:
+            if not coordinator.is_known_presentation_uuid(expected_uuid):
+                raise ServiceValidationError(
+                    "The selected presentation is no longer in a configured playlist"
+                )
+            try:
+                metadata = await coordinator.async_ensure_presentation_details(
+                    expected_uuid
+                )
+            except LookupError as err:
+                raise ServiceValidationError(
+                    "The selected presentation is no longer in a configured playlist"
+                ) from err
+
+            revision = coordinator.get_presentation_revision(expected_uuid)
+            if not metadata or not revision:
+                raise ServiceValidationError(
+                    "Selected presentation metadata is unavailable"
+                )
+            if expected_revision != revision:
+                raise ServiceValidationError(
+                    "The presentation changed while this slide was being selected; refresh and try again"
+                )
+            if (
+                slide_index >= metadata.get("slide_count", 0)
+                or find_slide(metadata, slide_index) is None
+            ):
+                raise ServiceValidationError(
+                    f"Slide index {slide_index} is outside the selected presentation"
+                )
+
+            try:
+                # Focus the selected playlist presentation before triggering
+                # the slide. The UUID and revision above bind this action to
+                # the exact browsed snapshot shown by the card.
+                await coordinator.api.trigger_slide(expected_uuid, slide_index)
+            except ProPresenterNotFoundError as err:
+                raise HomeAssistantError(
+                    f"ProPresenter rejected the slide trigger: {err}"
+                ) from err
+            except ProPresenterRequestError as err:
+                raise HomeAssistantError(f"ProPresenter trigger failed: {err}") from err
+            except ProPresenterConnectionError as err:
+                # The request may already have reached ProPresenter; do not retry.
+                raise HomeAssistantError(
+                    f"ProPresenter trigger status is unknown; reconcile before retrying: {err}"
+                ) from err
+            return
+
         metadata = await coordinator.async_ensure_active_presentation_details()
         snapshot = coordinator.get_active_snapshot()
         if not metadata or not coordinator.metadata_available:
@@ -232,8 +296,6 @@ def async_setup_services(hass: HomeAssistant) -> None:
             raise ServiceValidationError(
                 "The presentation changed while this slide was being selected; refresh and try again"
             )
-
-        slide_index = call.data["slide_index"]
         if (
             slide_index >= snapshot["slide_count"]
             or find_slide(metadata, slide_index) is None
@@ -265,9 +327,81 @@ def async_setup_services(hass: HomeAssistant) -> None:
         schema=TRIGGER_SLIDE_SCHEMA,
     )
 
+    async def async_trigger_playlist_item(call: ServiceCall) -> None:
+        """Trigger one presentation item from a guarded playlist snapshot."""
+        entity_ids = call.data.get(ATTR_ENTITY_ID, [])
+        if isinstance(entity_ids, str):
+            entity_ids = [entity_ids]
+        if len(entity_ids) != 1:
+            raise ServiceValidationError(
+                "propresenter.trigger_playlist_item requires exactly one active-presentation sensor"
+            )
+
+        entity_id = entity_ids[0]
+        await _check_control_permission(hass, call, entity_id)
+        streaming_coordinator = _resolve_trigger_coordinator(hass, entity_id)
+        static_coordinator = streaming_coordinator.static_coordinator
+        if static_coordinator is None:
+            raise HomeAssistantError("ProPresenter playlist data is unavailable")
+
+        expected_revision = call.data["expected_playlist_revision"]
+        current_revision = static_coordinator.data.get("presentation_playlist_revision")
+        if current_revision != expected_revision:
+            raise ServiceValidationError(
+                "The playlist changed while this item was being selected; refresh and try again"
+            )
+
+        playlist_uuid = call.data["playlist_uuid"]
+        item_key = call.data["item_key"]
+        item_index = call.data["item_index"]
+        presentation_uuid = call.data["presentation_uuid"]
+        item = find_playlist_item(
+            static_coordinator.get_presentation_playlist_catalog(),
+            playlist_uuid,
+            item_key,
+        )
+        if (
+            item is None
+            or item.get("index") != item_index
+            or item.get("presentation_uuid") != presentation_uuid
+        ):
+            raise ServiceValidationError(
+                "That playlist item is no longer available in the current playlist; refresh and try again"
+            )
+
+        try:
+            # This endpoint changes the live presentation item without first
+            # focusing a library presentation in the ProPresenter UI.
+            await streaming_coordinator.api.trigger_playlist_item(
+                playlist_uuid, item_index
+            )
+        except ProPresenterNotFoundError as err:
+            raise HomeAssistantError(
+                f"ProPresenter rejected the playlist item: {err}"
+            ) from err
+        except ProPresenterRequestError as err:
+            raise HomeAssistantError(
+                f"ProPresenter playlist switch failed: {err}"
+            ) from err
+        except ProPresenterConnectionError as err:
+            # Deliberately do not retry: the request may already have reached
+            # ProPresenter, so the card must reconcile the live sensor state.
+            raise HomeAssistantError(
+                "ProPresenter playlist switch status is unknown; reconcile before retrying: "
+                f"{err}"
+            ) from err
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_TRIGGER_PLAYLIST_ITEM,
+        async_trigger_playlist_item,
+        schema=TRIGGER_PLAYLIST_ITEM_SCHEMA,
+    )
+
 
 def async_unload_services(hass: HomeAssistant) -> None:
     """Unload ProPresenter services."""
     hass.services.async_remove(DOMAIN, SERVICE_SHOW_MESSAGE)
     hass.services.async_remove(DOMAIN, SERVICE_REFRESH_CACHE)
     hass.services.async_remove(DOMAIN, SERVICE_TRIGGER_SLIDE)
+    hass.services.async_remove(DOMAIN, SERVICE_TRIGGER_PLAYLIST_ITEM)

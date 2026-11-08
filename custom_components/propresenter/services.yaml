@@ -24,7 +24,7 @@ refresh_presentation_cache:
 
 trigger_slide:
   name: Trigger slide
-  description: Trigger one slide in the active ProPresenter presentation without changing the ProPresenter view context.
+  description: Trigger one slide in the active presentation, or focus a selected presentation from a configured playlist before triggering its slide.
   target:
     entity:
       integration: propresenter
@@ -42,7 +42,7 @@ trigger_slide:
           mode: box
     expected_presentation_uuid:
       name: Expected presentation UUID
-      description: Optional snapshot UUID used to reject a stale dashboard click.
+      description: Optional active or playlist presentation UUID used to reject a stale dashboard click.
       required: false
       selector:
         text:
@@ -50,5 +50,47 @@ trigger_slide:
       name: Expected metadata revision
       description: Optional opaque metadata revision paired with the expected UUID.
       required: false
+      selector:
+        text:
+
+trigger_playlist_item:
+  name: Trigger playlist item
+  description: Make one selected ProPresenter presentation playlist item live without first focusing a library presentation.
+  target:
+    entity:
+      integration: propresenter
+      domain: sensor
+  fields:
+    playlist_uuid:
+      name: Playlist UUID
+      description: The UUID of the ProPresenter playlist containing the selected item.
+      required: true
+      selector:
+        text:
+    item_key:
+      name: Playlist item key
+      description: The stable occurrence key returned by the presentation browser.
+      required: true
+      selector:
+        text:
+    item_index:
+      name: Playlist item index
+      description: The original 0-based item index in the ProPresenter playlist.
+      required: true
+      selector:
+        number:
+          min: 0
+          step: 1
+          mode: box
+    presentation_uuid:
+      name: Presentation UUID
+      description: The UUID of the presentation represented by the selected item.
+      required: true
+      selector:
+        text:
+    expected_playlist_revision:
+      name: Expected playlist revision
+      description: The opaque playlist revision captured when the item was selected.
+      required: true
       selector:
         text:

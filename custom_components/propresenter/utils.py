@@ -83,12 +83,20 @@ def collect_playlist_uuids(items: list[dict[str, Any]], uuids_list: list[str]) -
         uuids_list: List to append UUIDs to (modified in place)
     """
     for item in items:
-        field_type = item.get("field_type", "")
-        playlist_uuid = get_nested_value(item, "id", "uuid")
+        if not isinstance(item, dict):
+            continue
+        field_type = str(item.get("field_type") or item.get("type", "")).lower()
+        playlist_uuid = get_nested_value(item, "id", "uuid") or item.get("uuid")
+        if not isinstance(playlist_uuid, str):
+            playlist_uuid = None
 
-        if field_type == "playlist" and playlist_uuid:
+        has_item_list = isinstance(item.get("items"), list)
+        if playlist_uuid and (
+            field_type in {"playlist", "folder", "collection"}
+            or (has_item_list and field_type not in {"presentation", "slide", "group"})
+        ):
             uuids_list.append(playlist_uuid)
-        elif field_type == "group":
-            children = item.get("children", [])
+        if field_type in {"playlist", "group", "folder", "collection"}:
+            children = item.get("children") or item.get("items", [])
             if children:
                 collect_playlist_uuids(children, uuids_list)
