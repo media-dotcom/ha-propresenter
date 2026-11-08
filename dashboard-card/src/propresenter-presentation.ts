@@ -1566,6 +1566,6 @@ if (!customCards.some((item) => item.type === "propresenter-presentation")) {
     name: "ProPresenter Presentation",
     description: "A dynamic, guarded ProPresenter slide browser",
     preview: true,
-    documentationURL: "https://github.com/media-dotcom/ha-propresenter-suite",
+    documentationURL: "https://github.com/media-dotcom/ha-propresenter",
   });
 }
