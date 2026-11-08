@@ -1,7 +1,7 @@
 # Releasing
 
 The integration and dashboard card are released together from
-`media-dotcom/ha-propresenter-suite`.
+`media-dotcom/ha-propresenter`.
 
 1. Update `custom_components/propresenter/manifest.json` with the integration
    version for the release.
