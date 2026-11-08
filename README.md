@@ -4,8 +4,8 @@
 
 This custom integration allows you to control [ProPresenter](https://www.renewedvision.com/propresenter) presentation software from Home Assistant. Fully functional with ProPresenter v19 and up. Partial functionality with v7.9.1 and up.
 
-The integration and its dashboard card are maintained together in the
-`media-dotcom/ha-propresenter-suite` repository. The integration domain remains
+The integration and dashboard card have been consolidated into this repository.
+Install this one integration to get both; no separate card repository is needed. The integration domain remains
 `propresenter`, preserving existing config entries and entity identities.
 
 ## Some of the Features
@@ -87,7 +87,7 @@ Make sure the ProPresenter API is enabled:
 1. Make sure you have [HACS](https://hacs.xyz/) installed in your Home Assistant instance
 2. Search for  `ProPresenter` in HACS or click the button below:
 
-   [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=media-dotcom&repository=ha-propresenter-suite&category=integration)
+   [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=media-dotcom&repository=ha-propresenter&category=integration)
 
 3. Click **Download** on the ProPresenter integration
 4. Restart Home Assistant
@@ -100,7 +100,7 @@ Make sure the ProPresenter API is enabled:
 Existing installations keep their integration configuration because the
 integration domain remains `propresenter`. If HACS still points to the former
 repository, replace that custom repository entry with
-`media-dotcom/ha-propresenter-suite`, then update the integration.
+`media-dotcom/ha-propresenter`, then update the integration.
 
 ### Manual Installation
 
